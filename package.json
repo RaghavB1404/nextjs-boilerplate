@@ -17,7 +17,8 @@
     "langfuse": "^2",
     "better-sqlite3": "^9",
     "cheerio": "^1",
-    "ai":"latest"
+    "ai":"latest",
+    "@ai-sdk/openai": "latest",
   },
   "devDependencies": {
     "typescript": "^5",
