@@ -16,7 +16,8 @@
     "@openrouter/ai-sdk-provider":"latest",
     "langfuse": "^2",
     "better-sqlite3": "^9",
-    "cheerio": "^1"
+    "cheerio": "^1",
+    "ai":"latest"
   },
   "devDependencies": {
     "typescript": "^5",
