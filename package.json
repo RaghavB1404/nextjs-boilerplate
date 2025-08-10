@@ -13,7 +13,7 @@
     "react-dom": "19.1.0",
     "next": "15.4.6",
     "zod": "^3",
-    "@vercel/ai": "latest",
+    "@ai-sdk/openrouter": "latest",
     "langfuse": "^2",
     "better-sqlite3": "^9",
     "cheerio": "^1"
