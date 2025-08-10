@@ -5,7 +5,7 @@ export const Assertions = z.object({
   atc: z.boolean().optional(),
   textIncludes: z.string().min(1).optional(),
 }).refine(a => !!(a.price || a.atc || a.textIncludes), {
-  message: "At least one assertion (price/atc/textIncludes) is required"
+  message: "At least one assertion (price/atc/textIncludes) is required",
 });
 
 export const Check = z.object({
@@ -33,9 +33,11 @@ export const WorkflowSpec = z.object({
   checks: z.array(Check).min(1),
   actions: z.array(z.union([ActionSlack, ActionEmail])).min(1),
   guardrails: z.object({
-    timeoutSec: z.number().int().min(5).max(60).default(Number(process.env.SIM_TIMEOUT_SEC || 60)),
-    maxUrls: z.number().int().min(1).max(Number(process.env.MAX_URLS || 50)).default(Number(process.env.MAX_URLS || 50)),
-  }).default({})
+    timeoutSec: z.number().int().min(5).max(60)
+      .default(Number(process.env.SIM_TIMEOUT_SEC || 60)),
+    maxUrls: z.number().int().min(1).max(Number(process.env.MAX_URLS || 50))
+      .default(Number(process.env.MAX_URLS || 50)),
+  }).default({}),
 });
 
 export type WorkflowSpecT = z.infer<typeof WorkflowSpec>;
