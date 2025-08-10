@@ -4,7 +4,7 @@ import { z } from "zod";
 import { WorkflowSpec } from "./schema";
 
 const baseURL = process.env.OPENROUTER_BASE_URL || "https://openrouter.ai/api/v1";
-const modelName = process.env.LLM_MODEL || "openai/gpt-4o-mini";
+const modelName = process.env.LLM_MODEL || "openai/gpt-oss-20b:free";
 
 const openai = createOpenAI({
   apiKey: process.env.OPENROUTER_API_KEY!,  // OpenRouter key
@@ -39,3 +39,4 @@ Return ONLY valid JSON adhering to the provided schema. No prose, no comments.`;
     return { spec: object.fixed, repaired: true };
   }
 }
+
