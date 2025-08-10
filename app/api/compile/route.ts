@@ -1,17 +1,12 @@
-export const runtime = "nodejs";
+// app/api/compile/route.ts
+export const runtime = 'nodejs';
 
-import { NextRequest } from "next/server";
-import { compileToSpec } from "@/lib/llm";
-
-export async function POST(req: NextRequest) {
-  const { prompt } = await req.json();
-  if (!prompt || typeof prompt !== "string") {
-    return new Response(JSON.stringify({ error: "prompt is required" }), { status: 400 });
-  }
-  try {
-    const result = await compileToSpec(prompt);
-    return Response.json(result);
-  } catch (e: any) {
-    return new Response(JSON.stringify({ error: e.message || "compile_failed" }), { status: 500 });
-  }
+export async function POST() {
+  return new Response(JSON.stringify({ ok: true }), {
+    status: 200,
+    headers: { 'content-type': 'application/json' },
+  });
 }
+
+// Force TS to treat this file as a module, even if some editors strip exports:
+export {};
