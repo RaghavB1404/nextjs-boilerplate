@@ -1,5 +1,5 @@
 import { generateObject } from "ai";
-import { createOpenAI } from "ai/openai";
+import { createOpenAI } from "@ai-sdk/openai";
 import { z } from "zod";
 import { WorkflowSpec } from "./schema";
 
@@ -39,4 +39,5 @@ Return ONLY valid JSON adhering to the provided schema. No prose, no comments.`;
     return { spec: object.fixed, repaired: true };
   }
 }
+
 
