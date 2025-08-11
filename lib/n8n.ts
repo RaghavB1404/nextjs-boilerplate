@@ -67,12 +67,28 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];` } },
   return { workflowId: id, webhookUrl };
 }
 
+// replace your triggerWebhook with this:
 export async function triggerWebhook(webhookUrl: string, payload: any) {
-  const res = await fetch(webhookUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload || {}),
-  });
-  if (!res.ok) throw new Error(`webhook ${res.status}`);
+  async function post(url: string) {
+    const res = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(payload || {}),
+    });
+    return res;
+  }
+
+  let res = await post(webhookUrl);
+  if (res.status === 404 && /\/webhook\//.test(webhookUrl)) {
+    // try test endpoint automatically
+    const alt = webhookUrl.replace("/webhook/", "/webhook-test/");
+    res = await post(alt);
+  }
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`webhook ${res.status} ${t}`);
+  }
   return res.json().catch(() => ({}));
 }
+
+
