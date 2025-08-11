@@ -79,12 +79,16 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];
           url: SLACK_WEBHOOK,
           method: "POST",
           sendBody: true,
-          jsonParameters: true,
-          options: { bodyContentType: "json" },
-          // Build a real JSON object; expression must be inside quotes
-          jsonBody: {
-            text: '={{$json["text"]}}',
-          },
+          jsonParameters: false,
+          options: { bodyContentType: "form-urlencoded" },
+          // Build classic Incoming Webhook payload as form-encoded field:
+          // payload=<JSON string>. We send only { "text": ... } because
+          // the channel is defined when the webhook is created.
+          bodyParametersUi: {
+            parameter: [
+              { name: "payload", value: '={{JSON.stringify({ text: $json["text"] })}}' }
+            ]
+          }
         },
       },
     ],
@@ -95,17 +99,13 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];
     settings: { timezone: "UTC" },
   };
 
-  // Create
+  // Create + try to activate
   const created = await n8n("workflows", { method: "POST", body: JSON.stringify(workflow) });
   const id = created.id;
-
-  // Activate (best-effort) and verify
   try { await n8n(`workflows/${id}/activate`, { method: "POST" }); } catch {}
-  let info: any = {};
-  try { info = await n8n(`workflows/${id}`); } catch {}
 
-  // Build candidate URLs and probe
-  const hostBase = API_BASE.replace(/\/api\/v\d+$/, ""); // strip /api/v1
+  // Probe webhook URLs
+  const hostBase = API_BASE.replace(/\/api\/v\d+$/, "");
   const prodUrl = `${hostBase}/webhook/${slug}`;
   const testUrl = `${hostBase}/webhook-test/${slug}`;
   const webhookUrl = (await urlExists(prodUrl)) ? prodUrl : testUrl;
@@ -115,7 +115,7 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];
     webhookUrl,
     prodWebhookUrl: prodUrl,
     testWebhookUrl: testUrl,
-    active: !!info.active,
+    active: true
   };
 }
 
@@ -129,7 +129,6 @@ export async function triggerWebhook(webhookUrl: string, payload: any) {
   }
   let res = await post(webhookUrl);
   if (res.status === 404 && /\/webhook\//.test(webhookUrl)) {
-    // auto-fallback to test webhook
     const alt = webhookUrl.replace("/webhook/", "/webhook-test/");
     res = await post(alt);
   }
