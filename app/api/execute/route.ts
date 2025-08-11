@@ -1,13 +1,18 @@
 export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
-export async function GET() {
-  return new Response(JSON.stringify({ ok: true, route: 'execute' }), {
-    status: 200, headers: { 'content-type': 'application/json' }
-  });
-}
-export async function POST() {
-  return new Response(JSON.stringify({ ok: true, stub: true }), {
-    status: 200, headers: { 'content-type': 'application/json' }
-  });
+import { NextRequest, NextResponse } from 'next/server';
+import { triggerWebhook } from '@/lib/n8n';
+
+export async function POST(req: NextRequest) {
+  const { webhookUrl, payload } = await req.json().catch(() => ({}));
+  if (!webhookUrl) {
+    return NextResponse.json({ error: 'webhookUrl required' }, { status: 400 });
+  }
+  try {
+    const result = await triggerWebhook(webhookUrl, payload || {});
+    return NextResponse.json({ ok: true, result });
+  } catch (e: any) {
+    return NextResponse.json({ error: e.message || 'execute_failed' }, { status: 500 });
+  }
 }
