@@ -72,7 +72,9 @@ export default function Home() {
       const r = await fetch('/api/compile', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ prompt }) });
       if (r.ok) { const j = await r.json(); setSpec(j.spec || j); setStatus('Compiled ✓'); return; }
     } catch {}
-    const urls = (prompt.match(/https?:\/\/[^\s]+|\/demo\/[a-z]+/gi) || []).slice(0, 10);
+    const urlsRaw = (prompt.match(/https?:\/\/[^\s]+|\/demo\/[a-z]+/gi) || []);
+    const urls = (urlsRaw.length ? urlsRaw : ['/demo/pass','/demo/fail']).slice(0, 10);
+
     const wantPrice = /price/i.test(prompt);
     const wantATC = /(add to cart|atc)/i.test(prompt);
     const m = /textIncludes:\s*["']([^"']+)["']/i.exec(prompt);
