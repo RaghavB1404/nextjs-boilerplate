@@ -321,7 +321,14 @@ export default function Home() {
 
                     <button
                       onClick={async ()=>{
-                        const snippet = prompt('Custom Liquid/HTML snippet to inject:','<span class="agentops-note">AgentOps snippet</span>');
+                        const snippet =
+                          typeof window !== 'undefined'
+                          ? window.prompt(
+                          'Custom Liquid/HTML snippet to inject:',
+                            '<span class="agentops-note">AgentOps snippet</span>'
+                          )
+                          : null;
+
                         if (!snippet) return;
                         const r = await fetch('/api/shopify/patch', {
                           method:'POST', headers:{'content-type':'application/json'},
