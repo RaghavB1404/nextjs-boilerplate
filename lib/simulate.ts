@@ -70,8 +70,20 @@ async function mapPool<T, R>(items:T[], size:number, fn:(x:T)=>Promise<R>):Promi
 }
 
 export async function simulateUrls(urls: string[], assertions: Assertions, timeoutSec = 60) {
-  const ac = new AbortController(); const timer = setTimeout(()=>ac.abort(), timeoutSec*1000);
-  const work = await mapPool(urls, 4, async (url)=>{ // concurrency=4
+  const ac = new AbortController();
+  const timer = setTimeout(()=>ac.abort(), timeoutSec*1000);
+
+  const work = await mapPool(urls, 4, async (url) => {
+    // Built-in demo short-circuits
+    if (url.startsWith("/demo/pass")) {
+      return { url, ok: true, failures: [], millis: 5, evidence: "demo: price+ATC present" };
+    }
+    if (url.startsWith("/demo/fail")) {
+      return { url, ok: false, failures: ["MISSING:Price","MISSING:AddToCart"], millis: 7, evidence: "demo" };
+    }
+
+    // ... existing fetch/parse logic below ...
+
     const start=Date.now();
     try{
       const html=(await fetchHtml(url,ac)).slice(0,300_000);
@@ -86,3 +98,4 @@ export async function simulateUrls(urls: string[], assertions: Assertions, timeo
   clearTimeout(timer);
   return work as SimResult[];
 }
+
