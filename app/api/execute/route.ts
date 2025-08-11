@@ -3,57 +3,43 @@ export const runtime = 'nodejs';
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
-import { triggerWebhook } from '@/lib/n8n';      // your existing helper
-import { sendSlackText } from '@/lib/slack';     // new helper
+import { triggerWebhook } from '@/lib/n8n';
+import { sendSlackText } from '@/lib/slack';
 
-function buildSlackText(payload: any) {
+function buildAlertText(payload: any) {
   const report = Array.isArray(payload?.report) ? payload.report : [];
-  const failed = report.filter((r: any) => !r.ok);
-  const lines = failed.length
-    ? failed.map((f: any) => `• ${f.url} — ${(f.failures || []).join(', ')}`)
-    : ['All checks passed ✅'];
+  const failed = report.filter((r:any)=>!r.ok);
+  const lines = failed.length ? failed.map((f:any)=>`• ${f.url} — ${(f.failures||[]).join(', ')}`) : ['All checks passed ✅'];
   const title = payload?.title || 'PDP Guard results';
   return `${title}\n\n${lines.join('\n')}`;
 }
 
+export async function GET() { return NextResponse.json({ ok: true, usage: 'POST { webhookUrl?, payload, demoMode?, slackOverride? }' }); }
+
 export async function POST(req: NextRequest) {
-  const { webhookUrl, payload } = await req.json().catch(() => ({}));
-  if (!webhookUrl) {
-    return NextResponse.json({ error: 'webhookUrl required' }, { status: 400 });
-  }
+  const { webhookUrl, payload, demoMode, slackOverride } = await req.json().catch(()=>({}));
+  const alertText = buildAlertText(payload||{});
+  const results:any = { alertText };
 
-  const slackUrl = process.env.SLACK_WEBHOOK_URL || ""; // from Vercel env
-  const text = buildSlackText(payload || {});
+  // If demo mode: skip n8n/Slack, just return alert text
+  if (demoMode) return NextResponse.json({ ok: true, posted: 'demo', details: results });
 
-  // Run n8n webhook (best-effort) and Slack in parallel
-  const results: any = {};
+  // Run both best-effort
   await Promise.allSettled([
     (async () => {
       try {
-        const r = await triggerWebhook(webhookUrl, payload || {});
-        results.n8n = { ok: true, response: r };
-      } catch (e: any) {
-        results.n8n = { ok: false, error: e.message || String(e) };
-      }
+        if (webhookUrl) { const r = await triggerWebhook(webhookUrl, payload||{}); results.n8n = { ok:true, response: r }; }
+        else results.n8n = { ok:false, error: 'no_webhook' };
+      } catch (e:any) { results.n8n = { ok:false, error: e.message || String(e) }; }
     })(),
     (async () => {
-      if (!slackUrl) { results.slack = { ok: false, error: 'SLACK_WEBHOOK_URL not set' }; return; }
-      try {
-        await sendSlackText(slackUrl, text);
-        results.slack = { ok: true };
-      } catch (e: any) {
-        results.slack = { ok: false, error: e.message || String(e) };
-      }
+      const url = (slackOverride || process.env.SLACK_WEBHOOK_URL || "").trim();
+      if (!url) { results.slack = { ok:false, error: 'no_slack_url' }; return; }
+      try { await sendSlackText(url, alertText); results.slack = { ok:true }; }
+      catch (e:any) { results.slack = { ok:false, error: e.message || String(e) }; }
     })(),
   ]);
 
-  // Prefer Slack success as ground truth for the UI
-  if (results.slack?.ok) {
-    return NextResponse.json({ ok: true, posted: 'slack', details: results });
-  }
-  if (results.n8n?.ok) {
-    // n8n succeeded, but Slack failed (env or policy) — still return ok
-    return NextResponse.json({ ok: true, posted: 'n8n-only', details: results });
-  }
+  if (results.slack?.ok || results.n8n?.ok) return NextResponse.json({ ok: true, posted: results.slack?.ok ? 'slack' : 'n8n', details: results });
   return NextResponse.json({ error: 'execute_failed', details: results }, { status: 500 });
 }
