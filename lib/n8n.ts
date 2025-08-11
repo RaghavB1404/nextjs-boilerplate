@@ -1,58 +1,86 @@
 // lib/n8n.ts
 type N8nWorkflow = {
-  name: string; nodes: any[]; connections: Record<string, any>;
-  settings?: Record<string, any>; staticData?: Record<string, any>;
+  name: string;
+  nodes: any[];
+  connections: Record<string, any>;
+  settings?: Record<string, any>;
+  staticData?: Record<string, any>;
 };
 
 const API_BASE = process.env.N8N_BASE_URL!.replace(/\/+$/, ""); // e.g. https://host/api/v1
-const N8N_KEY  = process.env.N8N_API_KEY!;
+const N8N_KEY = process.env.N8N_API_KEY!;
 const SLACK_WEBHOOK = process.env.SLACK_WEBHOOK_URL!;
 
 async function n8n(path: string, init: RequestInit = {}) {
   const url = `${API_BASE}/${path.replace(/^\/+/, "")}`;
   const res = await fetch(url, {
     ...init,
-    headers: { "Content-Type": "application/json", "X-N8N-API-KEY": N8N_KEY, ...(init.headers || {}) },
+    headers: {
+      "Content-Type": "application/json",
+      "X-N8N-API-KEY": N8N_KEY,
+      ...(init.headers || {}),
+    },
   });
-  if (!res.ok) throw new Error(`n8n ${path} ${res.status}: ${await res.text().catch(()=>"")}`);
+  if (!res.ok) throw new Error(`n8n ${path} ${res.status}: ${await res.text().catch(() => "")}`);
   return res.json();
 }
 
 async function urlExists(url: string) {
   try {
-    const r = await fetch(url, { method: "OPTIONS" }); // does not trigger the flow
+    const r = await fetch(url, { method: "OPTIONS" });
     return r.ok;
-  } catch { return false; }
+  } catch {
+    return false;
+  }
 }
 
 export async function provisionN8nWorkflow(name: string, _channel: string, template: string) {
   const slug = `agentops-${Date.now()}`;
+
   const workflow: N8nWorkflow = {
     name,
     nodes: [
-      { id: "Webhook", name: "Webhook", type: "n8n-nodes-base.webhook", typeVersion: 1, position: [240,300],
-        parameters: { path: slug, httpMethod: "POST", options: {} } },
-      { id: "Function", name: "Format Message", type: "n8n-nodes-base.function", typeVersion: 1, position: [500,300],
-        parameters: { functionCode:
-`const body = items[0].json || {};
+      {
+        id: "Webhook",
+        name: "Webhook",
+        type: "n8n-nodes-base.webhook",
+        typeVersion: 1,
+        position: [240, 300],
+        parameters: { path: slug, httpMethod: "POST", options: {} },
+      },
+      {
+        id: "Function",
+        name: "Format Message",
+        type: "n8n-nodes-base.function",
+        typeVersion: 1,
+        position: [500, 300],
+        parameters: {
+          functionCode: `const body = items[0].json || {};
 const failed = (body.report || []).filter(r => !r.ok);
 const lines = failed.length ? failed.map(f => \`• \${f.url} — \${(f.failures||[]).join(', ')}\`) : ['All checks passed ✅'];
-return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];` } },
-      { id: "HTTP", name: "Slack Webhook", type: "n8n-nodes-base.httpRequest", typeVersion: 1, position: [760,300],
+return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];`,
+        },
+      },
+      {
+        id: "HTTP",
+        name: "Slack Webhook",
+        type: "n8n-nodes-base.httpRequest",
+        typeVersion: 1,
+        position: [760, 300],
         parameters: {
-  url: SLACK_WEBHOOK,
-  method: "POST",
-  sendBody: true,
-  jsonParameters: true,
-  options: { bodyContentType: "json" },
-  // NOTE: n8n expressions in JSON strings must be quoted and use ={{ ... }}
-  bodyParametersJson: '{ "text": "={{$json[\\"text\\"]}}" }'
-}
-
+          url: SLACK_WEBHOOK,
+          method: "POST",
+          sendBody: true,
+          jsonParameters: true,
+          options: { bodyContentType: "json" },
+          // n8n expressions in JSON must be quoted and use ={{ ... }}
+          bodyParametersJson: '{ "text": "={{$json[\\"text\\"]}}" }',
+        },
+      }, // <-- this closing brace was missing
     ],
     connections: {
       "Webhook": { "main": [[{ node: "Format Message", type: "main", index: 0 }]] },
-      "Format Message": { "main": [[{ node: "Slack Webhook", type: "main", index: 0 }]] }
+      "Format Message": { "main": [[{ node: "Slack Webhook", type: "main", index: 0 }]] },
     },
     settings: { timezone: "UTC" },
   };
@@ -60,35 +88,33 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];` } },
   // Create + activate
   const created = await n8n("workflows", { method: "POST", body: JSON.stringify(workflow) });
   const id = created.id;
-  // verify active (some instances need a beat before activation “sticks”)
-  const info = await n8n(`workflows/${id}`); // read status
+
+  // Ensure active
+  const info = await n8n(`workflows/${id}`);
   if (!info.active) await n8n(`workflows/${id}/activate`, { method: "POST" });
 
   // Build candidate URLs
-  const hostBase = API_BASE.replace(/\/api\/v\d+$/, ""); // strip /api/v1
+  const hostBase = API_BASE.replace(/\/api\/v\d+$/, "");
   const prodUrl = `${hostBase}/webhook/${slug}`;
   const testUrl = `${hostBase}/webhook-test/${slug}`;
 
-  // Pick the one that exists
+  // Pick whichever answers first
   const webhookUrl = (await urlExists(prodUrl)) ? prodUrl : testUrl;
 
-  return { workflowId: id, webhookUrl };
+  return { workflowId: id, webhookUrl, prodWebhookUrl: prodUrl, testWebhookUrl: testUrl, active: !!info.active };
 }
 
-// replace your triggerWebhook with this:
 export async function triggerWebhook(webhookUrl: string, payload: any) {
   async function post(url: string) {
-    const res = await fetch(url, {
+    return fetch(url, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(payload || {}),
     });
-    return res;
   }
-
   let res = await post(webhookUrl);
   if (res.status === 404 && /\/webhook\//.test(webhookUrl)) {
-    // try test endpoint automatically
+    // auto-fallback to test webhook
     const alt = webhookUrl.replace("/webhook/", "/webhook-test/");
     res = await post(alt);
   }
@@ -98,6 +124,3 @@ export async function triggerWebhook(webhookUrl: string, payload: any) {
   }
   return res.json().catch(() => ({}));
 }
-
-
-
