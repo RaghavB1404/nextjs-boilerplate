@@ -74,7 +74,8 @@ return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];`,
           jsonParameters: true,
           options: { bodyContentType: "json" },
           // n8n expressions in JSON must be quoted and use ={{ ... }}
-          bodyParametersJson: '{ "text": "={{$json[\\"text\\"]}}" }',
+          jsonBody: {
+          text: "={{$json[\"text\"]}}"
         },
       }, // <-- this closing brace was missing
     ],
@@ -124,3 +125,4 @@ export async function triggerWebhook(webhookUrl: string, payload: any) {
   }
   return res.json().catch(() => ({}));
 }
+
