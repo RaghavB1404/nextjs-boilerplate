@@ -5,6 +5,12 @@ import { NextRequest, NextResponse } from 'next/server';
 import { WorkflowSpec } from '@/lib/schema';
 import { provisionN8nWorkflow } from '@/lib/n8n'; // use relative path if you didn't set tsconfig alias
 
+// after provisionN8nWorkflow(...):
+const { workflowId, webhookUrl } = await provisionN8nWorkflow(...);
+const testUrl = webhookUrl.replace("/webhook/", "/webhook-test/");
+return NextResponse.json({ workflowId, webhookUrl, testWebhookUrl: testUrl });
+
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
   const parsed = WorkflowSpec.safeParse(body.spec);
@@ -23,3 +29,4 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: e.message || 'provision_failed' }, { status: 500 });
   }
 }
+
