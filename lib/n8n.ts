@@ -39,8 +39,16 @@ const failed = (body.report || []).filter(r => !r.ok);
 const lines = failed.length ? failed.map(f => \`• \${f.url} — \${(f.failures||[]).join(', ')}\`) : ['All checks passed ✅'];
 return [{ json: { text: \`${template}\\n\\n\${lines.join('\\n')}\` } }];` } },
       { id: "HTTP", name: "Slack Webhook", type: "n8n-nodes-base.httpRequest", typeVersion: 1, position: [760,300],
-        parameters: { url: SLACK_WEBHOOK, method: "POST", jsonParameters: true, sendBody: true, options: {},
-          bodyParametersJson: "{ \"text\": {{$json[\"text\"]}} }" } }
+        parameters: {
+  url: SLACK_WEBHOOK,
+  method: "POST",
+  sendBody: true,
+  jsonParameters: true,
+  options: { bodyContentType: "json" },
+  // NOTE: n8n expressions in JSON strings must be quoted and use ={{ ... }}
+  bodyParametersJson: '{ "text": "={{$json[\\"text\\"]}}" }'
+}
+
     ],
     connections: {
       "Webhook": { "main": [[{ node: "Format Message", type: "main", index: 0 }]] },
@@ -90,5 +98,6 @@ export async function triggerWebhook(webhookUrl: string, payload: any) {
   }
   return res.json().catch(() => ({}));
 }
+
 
 
