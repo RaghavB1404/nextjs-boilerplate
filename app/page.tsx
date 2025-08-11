@@ -1,175 +1,222 @@
 'use client';
-
 import { useEffect, useMemo, useState } from 'react';
 
-type Spec = any;
-type ReportRow = { url: string; ok: boolean; failures: string[]; millis: number; evidence?: string | null };
+type SimRow = { url: string; ok: boolean; failures: string[]; millis: number; evidence?: string|null };
 type Summary = { total: number; passed: number; failed: number };
 
+const TEMPLATES: Record<string,string> = {
+  "Guaranteed Demo": `Check these URLs. Verify price and Add-to-Cart. Post failures.\nURLs:\n/d
+emo/pass\n/demo/fail`,
+  "Promo Compliance": `On these PDPs, verify textIncludes: "Free shipping" and atc. Alert #ops-alerts.\nURLs:\nhttps://example.com/`,
+  "ATC Regression": `Check atc on these SKUs; post failures.\nURLs:\nhttps://example.com/`,
+  "SEO Price Signal": `Verify price meta present on these PDPs. Post failures.\nURLs:\nhttps://example.com/`,
+};
+
+function encodeShare(obj: any) {
+  const json = JSON.stringify(obj);
+  const b64 = Buffer.from(json, 'utf8').toString('base64');
+  return `/share/${encodeURIComponent(b64)}`;
+}
+
 export default function Home() {
-  const [prompt, setPrompt] = useState(
-    'Daily at 07:00, check these PDPs for price and Add-to-Cart; post failures to Slack #ops-alerts.\nURLs:\nhttps://example.com/a\nhttps://example.com/b'
-  );
-
-  const [spec, setSpec] = useState<Spec | null>(null);
-  const [repaired, setRepaired] = useState<boolean | null>(null);
-  const [report, setReport] = useState<ReportRow[] | null>(null);
-  const [summary, setSummary] = useState<Summary | null>(null);
+  const [prompt, setPrompt] = useState<string>(TEMPLATES["Guaranteed Demo"]);
+  const [spec, setSpec] = useState<any|null>(null);
+  const [report, setReport] = useState<SimRow[]|null>(null);
+  const [summary, setSummary] = useState<Summary|null>(null);
   const [webhookUrl, setWebhookUrl] = useState<string>('');
-  const [busy, setBusy] = useState<string>('');
-  const [msg, setMsg] = useState<string>('');
+  const [status, setStatus] = useState<string>('');
+  const [alertFeed, setAlertFeed] = useState<string[]>([]);
+  const [demoMode, setDemoMode] = useState<boolean>(false);
+  const [slackOverride, setSlackOverride] = useState<string>('');
 
-  // --- hydrate spec from sessionStorage so reloads don't wipe it
-  useEffect(() => {
+  // Persist critical state
+  useEffect(()=>{
+    const s = sessionStorage.getItem('spec'); if (s) setSpec(JSON.parse(s));
+    const w = sessionStorage.getItem('webhookUrl'); if (w) setWebhookUrl(w);
+    const r = sessionStorage.getItem('report'); if (r) setReport(JSON.parse(r));
+    const su = sessionStorage.getItem('summary'); if (su) setSummary(JSON.parse(su));
+  },[]);
+  useEffect(()=>{
+    if (spec) sessionStorage.setItem('spec', JSON.stringify(spec));
+    if (webhookUrl) sessionStorage.setItem('webhookUrl', webhookUrl);
+    if (report) sessionStorage.setItem('report', JSON.stringify(report));
+    if (summary) sessionStorage.setItem('summary', JSON.stringify(summary));
+  }, [spec, webhookUrl, report, summary]);
+
+  // Dumb compile (delegates to your existing /api/compile if you have it).
+  // If you already have /api/compile working, keep using it. Otherwise, synthesize a simple spec here.
+  async function compileSpec() {
+    setStatus('Compiling…');
+    // Try your existing /api/compile; if 404, fallback to heuristic builder.
     try {
-      const raw = sessionStorage.getItem('agentops_spec');
-      if (raw) setSpec(JSON.parse(raw));
-      const wh = sessionStorage.getItem('agentops_webhook');
-      if (wh) setWebhookUrl(wh);
+      const r = await fetch('/api/compile', { method: 'POST', headers: {'content-type':'application/json'}, body: JSON.stringify({ prompt }) });
+      if (r.ok) {
+        const j = await r.json();
+        setSpec(j.spec || j); setStatus('Compiled ✓'); return;
+      }
     } catch {}
-  }, []);
-
-  useEffect(() => {
-    if (spec) sessionStorage.setItem('agentops_spec', JSON.stringify(spec));
-  }, [spec]);
-
-  useEffect(() => {
-    if (webhookUrl) sessionStorage.setItem('agentops_webhook', webhookUrl);
-  }, [webhookUrl]);
-
-  const canSimulate = useMemo(() => !!spec, [spec]);
-  const canProvision = useMemo(() => !!spec, [spec]);
-  const canRun = useMemo(() => !!webhookUrl, [webhookUrl]);
-
-  async function call(path: string, body?: any) {
-    const res = await fetch(path, {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: body ? JSON.stringify(body) : undefined,
-      cache: 'no-store',
-    });
-    if (!res.ok) {
-      const t = await res.text().catch(() => '');
-      throw new Error(`${path} ${res.status} ${t}`);
-    }
-    return res.json();
+    // Heuristic fallback:
+    const urls = (prompt.match(/https?:\/\/[^\s]+|\/demo\/[a-z]+/gi) || []).slice(0, 10);
+    const wantPrice = /price/i.test(prompt);
+    const wantATC = /(add to cart|atc)/i.test(prompt);
+    const m = /textIncludes:\s*["']([^"']+)["']/i.exec(prompt);
+    const textIncludes = m?.[1];
+    const specLocal = {
+      name: 'Guard',
+      checks: [{ type: 'pdpCheck', name: 'PDP Check', urls, assertions: { price: wantPrice, atc: wantATC, ...(textIncludes?{textIncludes}:{} ) } }],
+      actions: [{ type: 'slack', channel: '#ops-alerts', template: 'PDP Guard results' }],
+      guardrails: { timeoutSec: 60, maxUrls: 50 },
+    };
+    setSpec(specLocal); setStatus('Compiled (local) ✓');
   }
 
-  async function onCompile() {
-    try {
-      setBusy('Compiling…'); setMsg('');
-      const data = await call('/api/compile', { prompt });
-      console.log('COMPILE response:', data);
-      if (!data || !data.spec) throw new Error('No spec returned from /api/compile');
-      setSpec(data.spec);
-      setRepaired(!!data.repaired);
-      // reset downstream state
-      setReport(null); setSummary(null); setWebhookUrl('');
-      setMsg('Compiled OK' + (data.repaired ? ' (repaired)' : ''));
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e.message || 'compile failed');
-    } finally {
-      setBusy('');
-    }
+  async function simulate() {
+    if (!spec) return;
+    setStatus('Simulating…');
+    const r = await fetch('/api/simulate', { method: 'POST', headers: { 'content-type':'application/json' }, body: JSON.stringify({ spec }) });
+    const j = await r.json();
+    if (!r.ok) { setStatus(`Simulate error: ${j.error || r.status}`); return; }
+    setReport(j.report); setSummary(j.summary); setStatus(`Simulated: ${j.summary.passed}/${j.summary.total} passed`);
   }
 
-  async function onSimulate() {
-    if (!spec) { setMsg('Compile first'); return; }
-    try {
-      setBusy('Simulating…'); setMsg('');
-      const data = await call('/api/simulate', { spec });
-      console.log('SIMULATE response:', data);
-      setReport(data.report || []);
-      setSummary(data.summary || null);
-      setMsg(data.summary ? `Simulated: ${data.summary.passed} passed / ${data.summary.failed} failed` : 'Simulated');
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e.message || 'simulate failed');
-    } finally {
-      setBusy('');
-    }
+  async function provision() {
+    if (!spec) return;
+    setStatus('Provisioning…');
+    const r = await fetch('/api/provision', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ spec }) });
+    const j = await r.json();
+    if (!r.ok) { setStatus(`Provision error: ${j.error || r.status}`); return; }
+    setWebhookUrl(j.webhookUrl); setStatus('Provisioned ✓');
   }
 
-  async function onProvision() {
-    if (!spec) { setMsg('Compile first'); return; }
-    try {
-      setBusy('Provisioning n8n…'); setMsg('');
-      const data = await call('/api/provision', { spec });
-      console.log('PROVISION response:', data);
-      if (!data.webhookUrl) throw new Error('No webhookUrl returned');
-      setWebhookUrl(data.webhookUrl);
-      setMsg('Provisioned OK');
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e.message || 'provision failed');
-    } finally {
-      setBusy('');
-    }
+  async function execute() {
+    if (!spec) return;
+    setStatus('Executing…');
+    const payload = { title: spec?.name || 'PDP Guard results', report: report || [] };
+    const r = await fetch('/api/execute', { method:'POST', headers:{'content-type':'application/json'},
+      body: JSON.stringify({ webhookUrl, payload, demoMode, slackOverride: slackOverride || undefined }) });
+    const j = await r.json();
+    if (!r.ok) { setStatus(`Execute error: ${j.error || r.status}`); return; }
+    const txt: string = j?.details?.alertText || '(no text)';
+    setAlertFeed(a => [txt, ...a].slice(0, 10));
+    setStatus(`Executed (${j.posted}) ✓`);
   }
 
-  async function onExecute() {
-    if (!webhookUrl) { setMsg('Provision first'); return; }
-    try {
-      setBusy('Executing…'); setMsg('');
-      const payload = { report: report || [] };
-      const data = await call('/api/execute', { webhookUrl, payload });
-      console.log('EXECUTE response:', data);
-      setMsg('Executed: Slack posted (see channel)');
-    } catch (e: any) {
-      console.error(e);
-      setMsg(e.message || 'execute failed');
-    } finally {
-      setBusy('');
-    }
-  }
+  const shareHref = useMemo(()=>{
+    if (!spec || !summary || alertFeed.length === 0) return '';
+    return encodeShare({ spec, summary, alertText: alertFeed[0] });
+  }, [spec, summary, alertFeed]);
 
   return (
-    <main className="p-6 max-w-5xl mx-auto">
-      <h1 className="text-2xl font-semibold mb-4">AgentOps Studio (MVP)</h1>
+    <main className="min-h-screen p-4 md:p-6 grid md:grid-cols-[240px_1fr] gap-4">
+      {/* Left rail: Templates */}
+      <aside className="space-y-2">
+        <h2 className="font-semibold">Templates</h2>
+        {Object.keys(TEMPLATES).map(k=>(
+          <button key={k} className="w-full text-left px-3 py-2 rounded border hover:bg-gray-50"
+            onClick={()=>{ setPrompt(TEMPLATES[k]); setSpec(null); setReport(null); setSummary(null); setWebhookUrl(''); setStatus(''); }}>
+            {k}
+          </button>
+        ))}
+        <div className="mt-4 space-y-2">
+          <label className="flex items-center gap-2">
+            <input type="checkbox" checked={demoMode} onChange={e=>setDemoMode(e.target.checked)} />
+            <span>Demo Mode (no external calls)</span>
+          </label>
+          <input placeholder="Optional: override Slack webhook URL"
+            className="w-full px-3 py-2 rounded border"
+            value={slackOverride}
+            onChange={e=>setSlackOverride(e.target.value)} />
+          {shareHref ? (
+            <a className="block text-blue-600 underline" href={shareHref} target="_blank">Share last run</a>
+          ) : <span className="text-gray-400 text-sm">Run once to enable share link</span>}
+        </div>
+      </aside>
 
-      <label className="block text-sm font-medium mb-2">Prompt</label>
-      <textarea
-        className="w-full border rounded p-3 h-40"
-        value={prompt}
-        onChange={(e) => setPrompt(e.target.value)}
-      />
+      {/* Main */}
+      <section className="space-y-4">
+        <div className="flex items-center justify-between">
+          <h1 className="text-xl md:text-2xl font-bold">AgentOpsStudio</h1>
+          <div className="text-sm px-2 py-1 rounded bg-gray-100">{status || 'Ready'}</div>
+        </div>
 
-      <div className="flex gap-3 mt-4">
-        <button type="button" onClick={onCompile} className="px-3 py-2 rounded bg-black text-white">Compile</button>
-        <button type="button" onClick={onSimulate} disabled={!canSimulate} className={`px-3 py-2 rounded ${canSimulate ? 'bg-gray-800 text-white' : 'bg-gray-300 text-gray-600 cursor-not-allowed'}`}>Simulate</button>
-        <button type="button" onClick={onProvision} disabled={!canProvision} className={`px-3 py-2 rounded ${canProvision ? 'bg-gray-700 text-white' : 'bg-gray-300 text-gray-600 cursor-not-allowed'}`}>Provision</button>
-        <button type="button" onClick={onExecute} disabled={!canRun} className={`px-3 py-2 rounded ${canRun ? 'bg-gray-600 text-white' : 'bg-gray-300 text-gray-600 cursor-not-allowed'}`}>Run now</button>
-        {busy && <span className="ml-2 text-sm">{busy}</span>}
-      </div>
-
-      {msg && <p className="mt-3 text-sm">{msg}</p>}
-
-      {spec && (
-        <section className="mt-6">
-          <h2 className="font-medium mb-2">Spec {repaired ? <em>(repaired)</em> : null}</h2>
-          <pre className="text-xs bg-gray-100 p-3 rounded overflow-auto">{JSON.stringify(spec, null, 2)}</pre>
-        </section>
-      )}
-
-      {summary && (
-        <section className="mt-6">
-          <h2 className="font-medium mb-1">Simulation summary</h2>
-          <div className="text-sm mb-2">
-            {summary.passed} passed / {summary.failed} failed
+        <div className="grid md:grid-cols-2 gap-4">
+          <div className="p-3 rounded border">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="font-semibold">Prompt</h2>
+              <button onClick={compileSpec} className="px-3 py-1 rounded bg-black text-white">Compile</button>
+            </div>
+            <textarea className="w-full h-48 p-2 rounded border" value={prompt} onChange={e=>setPrompt(e.target.value)} />
           </div>
-          {report && (
-            <pre className="text-xs bg-gray-100 p-3 rounded overflow-auto">{JSON.stringify(report, null, 2)}</pre>
-          )}
-        </section>
-      )}
 
-      {webhookUrl && (
-        <section className="mt-6">
-          <h2 className="font-medium mb-1">n8n Webhook</h2>
-          <code className="text-xs">{webhookUrl}</code>
-        </section>
-      )}
+          <div className="p-3 rounded border">
+            <div className="flex items-center justify-between mb-2">
+              <h2 className="font-semibold">Spec</h2>
+              {spec ? <span className="text-xs px-2 py-0.5 rounded bg-green-100">ready</span> : <span className="text-xs px-2 py-0.5 rounded bg-gray-100">—</span>}
+            </div>
+            <pre className="text-xs whitespace-pre-wrap">{spec ? JSON.stringify(spec, null, 2) : 'Compile to view spec'}</pre>
+          </div>
+        </div>
+
+        <div className="grid md:grid-cols-3 gap-4">
+          <div className="p-3 rounded border">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold">Simulate</h3>
+              <button disabled={!spec} onClick={simulate} className={`px-3 py-1 rounded ${spec?'bg-black text-white':'bg-gray-200 text-gray-500'}`}>Simulate</button>
+            </div>
+            {summary && (
+              <div className="text-sm mb-2">Summary: {summary.passed}/{summary.total} passed</div>
+            )}
+            <div className="max-h-64 overflow-auto">
+              {report?.length ? (
+                <table className="w-full text-xs">
+                  <thead><tr className="text-left"><th>URL</th><th>OK</th><th>ms</th><th>Reason</th></tr></thead>
+                  <tbody>
+                    {report.map((r,i)=>(
+                      <tr key={i}>
+                        <td className="pr-2 align-top max-w-[220px] break-words">{r.url}</td>
+                        <td className={`pr-2 align-top ${r.ok?'text-green-600':'text-red-600'}`}>{r.ok?'✓':'×'}</td>
+                        <td className="pr-2 align-top">{r.millis}</td>
+                        <td className="align-top">{r.ok?'—':(r.failures[0]||'')}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              ) : <div className="text-sm text-gray-500">No results yet</div>}
+            </div>
+          </div>
+
+          <div className="p-3 rounded border">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold">Provision</h3>
+              <button disabled={!spec} onClick={provision} className={`px-3 py-1 rounded ${spec?'bg-black text-white':'bg-gray-200 text-gray-500'}`}>Provision</button>
+            </div>
+            <div className="text-xs break-all">{webhookUrl || '—'}</div>
+          </div>
+
+          <div className="p-3 rounded border">
+            <div className="flex items-center justify-between mb-2">
+              <h3 className="font-semibold">Execute</h3>
+              <button disabled={!spec} onClick={execute} className={`px-3 py-1 rounded ${spec?'bg-black text-white':'bg-gray-200 text-gray-500'}`}>Run now</button>
+            </div>
+            <div className="text-xs text-gray-600">Demo Mode: {demoMode ? 'ON' : 'OFF'}</div>
+            <div className="text-xs text-gray-600">Slack: {slackOverride ? 'override' : (process.env.NEXT_PUBLIC_SLACK_HIDDEN?'set':'unset')}</div>
+          </div>
+        </div>
+
+        <div className="p-3 rounded border">
+          <div className="flex items-center justify-between mb-2">
+            <h3 className="font-semibold">Alert Feed</h3>
+            {shareHref && <a className="text-blue-600 underline text-sm" href={shareHref} target="_blank">Share last run</a>}
+          </div>
+          {alertFeed.length ? (
+            <ul className="space-y-2 text-sm">
+              {alertFeed.map((t,idx)=>(
+                <li key={idx} className="p-2 rounded border whitespace-pre-wrap">{t}</li>
+              ))}
+            </ul>
+          ) : <div className="text-sm text-gray-500">No alerts yet</div>}
+        </div>
+      </section>
     </main>
   );
 }
