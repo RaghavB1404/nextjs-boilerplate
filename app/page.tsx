@@ -1,6 +1,9 @@
 'use client';
 import { useEffect, useMemo, useState } from 'react';
+import dynamic from 'next/dynamic';
 import Dag from './components/Dag';
+
+const Diff = dynamic(() => import('./components/Diff'), { ssr: false });
 
 type SimRow = { url: string; ok: boolean; failures: string[]; millis: number; evidence?: string|null };
 type Summary = { total: number; passed: number; failed: number };
@@ -23,10 +26,10 @@ function encodeShare(obj: any) {
   const b64 = Buffer.from(json, 'utf8').toString('base64');
   return `/share/${encodeURIComponent(b64)}`;
 }
+
 function parseBranching(prompt: string){
   const fail = /if\s+any\s+fail/i.test(prompt) || /alert on fail/i.test(prompt);
   const pass = /if\s+all\s+pass/i.test(prompt) || /alert on pass/i.test(prompt);
-  // default templates
   const onFailActions = [{ type:'slack', channel:'#ops-alerts', template:'PDP Guard results' }];
   const onPassActions = [{ type:'slack', channel:'#ops-ok',    template:'PDP Guard results' }];
   const conds:any[]=[];
@@ -65,12 +68,10 @@ export default function Home() {
 
   async function compileSpec() {
     setStatus('Compiling…');
-    // try your /api/compile if present
     try {
       const r = await fetch('/api/compile', { method:'POST', headers:{'content-type':'application/json'}, body: JSON.stringify({ prompt }) });
       if (r.ok) { const j = await r.json(); setSpec(j.spec || j); setStatus('Compiled ✓'); return; }
     } catch {}
-    // heuristic fallback
     const urls = (prompt.match(/https?:\/\/[^\s]+|\/demo\/[a-z]+/gi) || []).slice(0, 10);
     const wantPrice = /price/i.test(prompt);
     const wantATC = /(add to cart|atc)/i.test(prompt);
@@ -153,6 +154,8 @@ export default function Home() {
   const passActions = spec?.checks?.[0]?.conditions?.find((c:any)=>c.when==='onPass')?.actions?.length || 0;
   const failActions = spec?.checks?.[0]?.conditions?.find((c:any)=>c.when==='onFail')?.actions?.length || (spec?.actions?.length||0);
   const trace = summary ? (summary.passed<summary.total ? 'onFail' : 'onPass') : null;
+
+  const firstFail = report?.find(r=>!r.ok) || null;
 
   return (
     <main className="min-h-screen p-4 md:p-6 grid md:grid-cols-[260px_1fr] gap-4">
@@ -245,6 +248,16 @@ export default function Home() {
                 </table>
               ) : <div className="text-sm text-gray-500">No results yet</div>}
             </div>
+
+            {/* Evidence (first failing URL) */}
+            {firstFail && (
+              <div className="mt-3 p-2 rounded border">
+                <div className="font-semibold text-sm mb-2">Evidence — {firstFail.url}</div>
+                <div className="text-xs mb-2">{firstFail.evidence ? `Snippet: ${firstFail.evidence}` : '—'}</div>
+                <div className="text-xs mb-2">Visual proof (Current vs Baseline):</div>
+                <Diff currentUrl={firstFail.url} />
+              </div>
+            )}
           </div>
 
           <div className="p-3 rounded border">
@@ -275,7 +288,54 @@ export default function Home() {
             )}
             {diagnosis && (
               <div className="mt-3 p-2 rounded border text-xs whitespace-pre-wrap">
-                <div className="font-semibold mb-1">Diagnosis</div>
+                <div className="flex items-center justify-between">
+                  <div className="font-semibold mb-1">Diagnosis & Fix</div>
+                  <div className="space-x-2">
+                    <button
+                      onClick={async ()=>{
+                        const r = await fetch('/api/shopify/patch', {
+                          method:'POST', headers:{'content-type':'application/json'},
+                          body: JSON.stringify({ kind: 'price' })
+                        });
+                        const j = await r.json();
+                        if (!r.ok) { alert(`Shopify patch error: ${j.error||r.status}`); return; }
+                        if (j.preview) window.open(j.preview, '_blank');
+                      }}
+                      className="px-2 py-1 rounded bg-black text-white text-xs"
+                      title="Creates a draft theme with a price snippet injected"
+                    >Create Draft (Price)</button>
+
+                    <button
+                      onClick={async ()=>{
+                        const r = await fetch('/api/shopify/patch', {
+                          method:'POST', headers:{'content-type':'application/json'},
+                          body: JSON.stringify({ kind: 'atc' })
+                        });
+                        const j = await r.json();
+                        if (!r.ok) { alert(`Shopify patch error: ${j.error||r.status}`); return; }
+                        if (j.preview) window.open(j.preview, '_blank');
+                      }}
+                      className="px-2 py-1 rounded border text-xs"
+                      title="Creates a draft theme with an ATC button injected"
+                    >Create Draft (ATC)</button>
+
+                    <button
+                      onClick={async ()=>{
+                        const snippet = prompt('Custom Liquid/HTML snippet to inject:','<span class="agentops-note">AgentOps snippet</span>');
+                        if (!snippet) return;
+                        const r = await fetch('/api/shopify/patch', {
+                          method:'POST', headers:{'content-type':'application/json'},
+                          body: JSON.stringify({ kind: 'custom', custom: snippet })
+                        });
+                        const j = await r.json();
+                        if (!r.ok) { alert(`Shopify patch error: ${j.error||r.status}`); return; }
+                        if (j.preview) window.open(j.preview, '_blank');
+                      }}
+                      className="px-2 py-1 rounded border text-xs"
+                      title="Creates a draft theme with your snippet injected"
+                    >Create Draft (Custom)</button>
+                  </div>
+                </div>
                 {diagnosis}
               </div>
             )}
